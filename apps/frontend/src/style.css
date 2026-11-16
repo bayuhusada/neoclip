@@ -1,0 +1,17 @@
+@import "tailwindcss";
+
+@theme {
+  --color-brand: #8b5cf6;
+  --color-brand-accent: #a78bfa;
+}
+
+:root {
+  background: #09090b;
+  color: #f4f4f5;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  background: radial-gradient(ellipse at 72% 0%, #191329 0%, #09090b 45%);
+}
