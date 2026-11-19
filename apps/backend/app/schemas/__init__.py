@@ -38,10 +38,15 @@ class VideoRead(ORMModel):
     fps: float | None
     video_codec: str | None
     audio_codec: str | None
+    youtube_url: str | None = None
     status: str
     error: str | None
     created_at: datetime
     updated_at: datetime
+
+
+class VideoUpdate(BaseModel):
+    youtube_url: str | None = Field(default=None, max_length=500)
 
 
 class TranscriptSegment(BaseModel):

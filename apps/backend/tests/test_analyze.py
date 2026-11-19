@@ -330,6 +330,82 @@ def test_analyze_empty_content_error_is_actionable(monkeypatch):
     assert "Check model availability" in message
 
 
+# ------------------------------------------------- SSE / non-JSON body tolerance
+
+
+class _FakeResponse:
+    def __init__(self, body, status_code=200):
+        self._body = body
+        self.status_code = status_code
+
+    def json(self):
+        if isinstance(self._body, dict):
+            return self._body
+        raise ValueError("not json")
+
+    @property
+    def text(self):
+        return self._body
+
+
+def test_load_body_accepts_normal_json():
+    body = analyzer_module._load_body(_FakeResponse({"choices": [{"message": {"content": "{}"}}]}))
+    assert body["choices"][0]["message"]["content"] == "{}"
+
+
+def test_load_body_rebuilds_sse_stream():
+    sse = (
+        'data: {"model":"m","choices":[{"delta":{"content":"{\\"clips\\": "}}]}\n'
+        'data: {"model":"m","choices":[{"delta":{"content":"[]}"}}]}\n'
+        'data: [DONE]\n'
+    )
+    body = analyzer_module._load_body(_FakeResponse(sse))
+    content = body["choices"][0]["message"]["content"]
+    assert content == '{"clips": []}'
+
+
+def test_load_body_raises_on_garbage():
+    with pytest.raises(RuntimeError) as excinfo:
+        analyzer_module._load_body(_FakeResponse("not json at all"))
+    assert "non-JSON body" in str(excinfo.value)
+
+
+def test_analyze_handles_sse_response(monkeypatch):
+    import httpx
+
+    sse = (
+        'data: {"model":"m","choices":[{"delta":{"content":"{\\"clips\\": ["}}]}\n'
+        'data: {"model":"m","choices":[{"delta":{"content":"]}"}}]}\n'
+        'data: [DONE]\n'
+    )
+
+    class Resp:
+        def __init__(self):
+            self.status_code = 200
+            self.text = sse
+
+        def json(self):
+            raise ValueError("SSE body is not JSON")
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            return Resp()
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(analyzer_module, "get_effective_config", lambda: {"api_key": "k", "model": "m", "base_url": "http://127.0.0.1:20128/v1"})
+
+    assert asyncio.run(analyzer_module.analyze_transcript("teks", 60.0)) == []
+
+
 # ------------------------------------------------------------------ API tests
 
 

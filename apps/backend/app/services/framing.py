@@ -137,11 +137,12 @@ def resolve_clip_mode(
 ) -> str:
     """Turn a requested camera mode into the effective one for this window.
 
-    `smart_auto` inspects face counts over time:
-      - two people talking the whole time  -> `split`
-      - one person talking the whole time  -> `single`
-      - many faces / group laughter        -> `group`
-    Any other requested mode is returned unchanged (manual override).
+    `smart_auto` inspects distinct face counts over time:
+      - one/two people talking  -> `single` (follow the dominant face)
+      - many faces (3+)         -> `group` (wider crop covering the group)
+    Split screen is never auto-selected: a static full-clip split looks bad, so
+    `split` / `split_stacked` are opt-in only. Any other requested mode is
+    returned unchanged (manual override).
     """
     if requested != "smart_auto":
         return requested
@@ -345,40 +346,43 @@ def _resolve_mode(
     video_w: int,
     video_h: int,
 ) -> str:
-    """Decide the effective framing mode for a clip window from face tracks."""
+    """Decide the effective framing mode for a clip window from face tracks.
+
+    Split screen is never auto-selected here: a static full-clip split looks
+    bad, so `split` / `split_stacked` stay opt-in. `smart_auto` only returns
+    `original`, `single` (follow the dominant face) or `group` (wider crop for
+    a real crowd).
+    """
     duration = max(0.0, clip_end - clip_start)
     if not tracks or duration <= 0:
         return "original"
 
     bucket_sec = 1.0
     n_buckets = max(1, int(duration / bucket_sec) + 1)
-    counts = [0] * n_buckets
-    for track in tracks:
-        frames = [f for f in track.get("frames", []) if clip_start <= float(f["t"]) <= clip_end]
-        if not frames:
-            continue
-        for f in frames:
-            rel = float(f["t"]) - clip_start
-            idx = min(n_buckets - 1, int(rel / bucket_sec))
-            counts[idx] += 1
+    # Count DISTINCT track ids per bucket. Counting raw detection frames would
+    # invent a second face on every sample: at 2 fps one person yields 2
+    # detections per second, which used to trigger a bogus split screen.
+    per_bucket: list[set[int]] = [set() for _ in range(n_buckets)]
+    for fallback_id, track in enumerate(tracks):
+        track_id = track.get("id", fallback_id)
+        for f in track.get("frames", []):
+            t = float(f["t"])
+            if t < clip_start or t > clip_end:
+                continue
+            idx = min(n_buckets - 1, int((t - clip_start) / bucket_sec))
+            per_bucket[idx].add(track_id)
 
+    counts = [len(bucket) for bucket in per_bucket]
     if not any(counts):
         return "original"
 
-    max_count = max(counts)
-    two_ratio = sum(1 for c in counts if c >= 2) / len(counts)
     three_ratio = sum(1 for c in counts if c >= 3) / len(counts)
-    one_ratio = sum(1 for c in counts if c == 1) / len(counts)
 
-    if max_count >= 2 and two_ratio >= 0.55 and three_ratio <= 0.25:
-        return "split"
-    if three_ratio >= 0.2 or (max_count >= 2 and two_ratio >= 0.25):
-        # Multiple faces present -> show the group (covers laughter / group chat).
-        # One face keeps cropping tight (handled by single/group keyframe logic).
+    # A real crowd (3+ people) gets the wider group crop; everything else
+    # follows the dominant face so the clip stays a normal talking-head shot.
+    if three_ratio >= 0.2:
         return "group"
-    if one_ratio >= 0.5:
-        return "single"
-    return "group"
+    return "single"
 
 
 # --------------------------------------------------------------------------- #

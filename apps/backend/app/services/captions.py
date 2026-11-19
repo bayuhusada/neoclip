@@ -145,6 +145,17 @@ MIN_SIZE_SCALE = 0.6
 MAX_SIZE_SCALE = 1.8
 
 
+# Preset names that mean "skip rendering captions entirely".
+DISABLED_CAPTION_PRESETS = {"none", "off", "no_caption"}
+
+
+def is_caption_disabled(preset: str | None) -> bool:
+    """True when the clip requests no captions at all."""
+    if not preset:
+        return False
+    return preset.strip().lower() in DISABLED_CAPTION_PRESETS
+
+
 def clamp_size_scale(value: float | None) -> float:
     """Clamp a stored per-clip font scale into the supported range."""
     if value is None:

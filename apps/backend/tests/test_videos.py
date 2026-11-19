@@ -223,3 +223,48 @@ def test_delete_video_never_unlinks_outside_storage(client, session, temp_storag
 
 def test_max_upload_bytes_reads_settings():
     assert max_upload_bytes() == settings.max_upload_mb * 1024 * 1024
+
+
+@mock.patch.object(videos_api, "probe_media", return_value=FAKE_PROBE_RESULT)
+def test_upload_accepts_youtube_url(_mock_probe, client, session, temp_storage):
+    project = _make_project(session)
+    response = client.post(
+        "/api/videos",
+        data={
+            "project_id": project.id,
+            "youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        },
+        files={"file": ("song.mp4", b"\x00\x01fakevideo", "video/mp4")},
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["youtube_url"] == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+
+
+@mock.patch.object(videos_api, "probe_media", return_value=FAKE_PROBE_RESULT)
+def test_update_video_youtube_url(_mock_probe, client, session, temp_storage):
+    project = _make_project(session)
+    created = client.post(
+        "/api/videos",
+        data={
+            "project_id": project.id,
+            "youtube_url": "https://youtu.be/dQw4w9WgXcQ",
+        },
+        files={"file": ("song.mp4", b"\x00\x01fakevideo", "video/mp4")},
+    ).json()
+
+    response = client.patch(
+        f"/api/videos/{created['id']}",
+        json={"youtube_url": "https://www.youtube.com/watch?v=7FvHcY0mMqI"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["youtube_url"] == "https://www.youtube.com/watch?v=7FvHcY0mMqI"
+
+    assert (
+        client.patch(
+            f"/api/videos/{created['id']}",
+            json={"youtube_url": "https://not-a-youtube-url"},
+        ).status_code
+        == 400
+    )

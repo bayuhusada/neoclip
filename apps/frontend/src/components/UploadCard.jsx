@@ -28,6 +28,7 @@ export default function UploadCard({ project, onProjectCreated, onUploaded, conf
   const [result, setResult] = useState(null);
   const [projectName, setProjectName] = useState("");
   const [creating, setCreating] = useState(false);
+  const [youtubeUrl, setYoutubeUrl] = useState("");
 
   const busy = progress !== null;
 
@@ -74,9 +75,11 @@ export default function UploadCard({ project, onProjectCreated, onUploaded, conf
       const video = await api.uploadVideo({
         projectId: project.id,
         file,
+        youtubeUrl: youtubeUrl.trim() || undefined,
         onProgress: setProgress,
       });
       setResult(video);
+      setYoutubeUrl("");
       onUploaded?.(video);
       if (video.status === "failed") {
         setError(video.error || "Video tersimpan tetapi metadata gagal dibaca (ffprobe).");
@@ -158,6 +161,16 @@ export default function UploadCard({ project, onProjectCreated, onUploaded, conf
             {busy ? `Mengunggah… ${progress}%` : "Pilih video"}
           </button>
         </>
+      )}
+
+      {project && (
+        <input
+          type="text"
+          value={youtubeUrl}
+          onChange={(event) => setYoutubeUrl(event.target.value)}
+          placeholder="Tautan YouTube (opsional, mis. https://youtube.com/watch?v=xxxxxxxxxxx)"
+          className="mt-3 w-full max-w-md rounded-lg border border-[#2c2c36] bg-[#0d0d12] px-3 py-2 text-[12px] text-[#e4e4e7] outline-none placeholder:text-[#52525b] focus:border-[#7c3aed]"
+        />
       )}
 
       {busy && (

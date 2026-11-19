@@ -7,7 +7,7 @@ from app.core.config import settings
 from app.db import get_db
 from app.models.video import Video
 from app.models.project import Project
-from app.schemas import VideoRead
+from app.schemas import VideoRead, VideoUpdate
 from app.services.files import (
     FileRejected,
     delete_video_files,
@@ -24,6 +24,7 @@ router = APIRouter(prefix="/videos", tags=["videos"])
 def upload_video(
     project_id: int = Form(...),
     file: UploadFile = File(...),
+    youtube_url: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
     # Validate cheap rules before touching the database or disk.
@@ -53,6 +54,7 @@ def upload_video(
         stored_path=f"uploads/{stored_name}",
         size_bytes=size_bytes,
         mime_type=file.content_type,
+        youtube_url=youtube_url or None,
         status="probing",
     )
     db.add(video)
@@ -107,6 +109,26 @@ def get_video(video_id: int, db: Session = Depends(get_db)):
     video = db.get(Video, video_id)
     if video is None:
         raise HTTPException(status_code=404, detail=f"Video {video_id} not found")
+    return video
+
+
+@router.patch("/{video_id}", response_model=VideoRead)
+def update_video(video_id: int, payload: VideoUpdate, db: Session = Depends(get_db)):
+    """Update editable metadata. Currently only the optional YouTube URL."""
+    video = db.get(Video, video_id)
+    if video is None:
+        raise HTTPException(status_code=404, detail=f"Video {video_id} not found")
+
+    url = (payload.youtube_url or "").strip() or None
+    if url is not None:
+        from app.services.youtube_transcript import extract_video_id
+
+        if extract_video_id(url) is None:
+            raise HTTPException(status_code=400, detail="URL YouTube tidak valid")
+
+    video.youtube_url = url
+    db.commit()
+    db.refresh(video)
     return video
 
 

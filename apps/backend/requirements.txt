@@ -1,13 +1,1 @@
-fastapi==0.162.4
-uvicorn[standard]==0.54.0
-pydantic==2.14.3
-pydantic-settings==2.16.2
-sqlalchemy==2.1.8
-alembic==1.20.1
-httpx==0.28.1
-python-multipart==0.0.33
-faster-whisper==1.2.1
-# faster-whisper calls av.open(..., metadata_errors="ignore"); PyAV 17+ removed that
-# kwarg, so pin a version that still supports it and ships a cp314 wheel.
-av==16.1.0
-pytest==9.2.0
+youtube-transcript-api==0.1.0

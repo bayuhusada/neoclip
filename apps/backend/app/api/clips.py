@@ -250,6 +250,23 @@ def get_clip_thumbnail(clip_id: int, db: Session = Depends(get_db)):
             )
         except RenderError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+    else:
+        # If thumbnail exists but video file may have changed (e.g., re-upload), regenerate.
+        video = db.get(Video, clip.video_id)
+        if video:
+            video_path = Path(settings.storage_dir) / video.stored_path
+            if video_path.exists():
+                current_mtime = video_path.stat().st_mtime
+                cached_mtime = thumb_path.stat().st_mtime
+                if current_mtime > cached_mtime:
+                    try:
+                        render_thumbnail(
+                            video_path=video_path,
+                            output_path=thumb_path,
+                            at_sec=clip.start_sec,
+                        )
+                    except RenderError as exc:
+                        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     return FileResponse(thumb_path, media_type="image/jpeg")
 

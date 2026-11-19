@@ -15,12 +15,14 @@ import {
 } from "lucide-react";
 import { api } from "../api";
 import Eyebrow from "../components/Eyebrow";
+import VideoPicker from "../components/VideoPicker";
 
 const CARD = "rounded-xl border border-[#25252d] bg-[#111115] p-4";
 const INPUT =
   "w-full rounded-lg border border-[#2c2c36] bg-[#0d0d12] px-2.5 py-1.5 text-[11px] text-[#e4e4e7] outline-none placeholder:text-[#52525b] focus:border-[#7c3aed]";
 
 const CAPTION_PRESETS = [
+  { value: "none", label: "Tanpa caption" },
   { value: "modern_bold", label: "Modern Bold" },
   { value: "karaoke", label: "Karaoke" },
   { value: "minimal", label: "Minimal" },
@@ -270,25 +272,27 @@ function ClipCard({ clip, busy, onSave, onApprove, onDelete, onRender, onDownloa
                 ))}
               </select>
             </label>
-            <label className="block">
-              <div className="mb-1 flex items-center justify-between">
-                <span className="text-[9px] uppercase tracking-wide text-[#71717a]">
-                  Ukuran Teks
-                </span>
-                <span className="text-[10px] text-[#a1a1aa]">
-                  {Math.round(Number(form.caption_size || 1.0) * 100)}%
-                </span>
-              </div>
-              <input
-                type="range"
-                min="0.6"
-                max="1.8"
-                step="0.1"
-                value={form.caption_size || 1.0}
-                onChange={(event) => update("caption_size", Number(event.target.value))}
-                className="w-full accent-[#3b82f6]"
-              />
-            </label>
+            {form.caption_preset !== "none" && (
+              <label className="block">
+                <div className="mb-1 flex items-center justify-between">
+                  <span className="text-[9px] uppercase tracking-wide text-[#71717a]">
+                    Ukuran Teks
+                  </span>
+                  <span className="text-[10px] text-[#a1a1aa]">
+                    {Math.round(Number(form.caption_size || 1.0) * 100)}%
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min="0.6"
+                  max="1.8"
+                  step="0.1"
+                  value={form.caption_size || 1.0}
+                  onChange={(event) => update("caption_size", Number(event.target.value))}
+                  className="w-full accent-[#3b82f6]"
+                />
+              </label>
+            )}
             <label className="block">
               <span className="mb-1 block text-[9px] uppercase tracking-wide text-[#71717a]">
                 Camera Mode
@@ -393,6 +397,7 @@ export default function EditorView({ videos, onNavigate }) {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
+  const [videoUrl, setVideoUrl] = useState("");
 
   useEffect(() => {
     if (videoId === null && videos.length > 0) setVideoId(videos[0].id);
@@ -456,6 +461,22 @@ export default function EditorView({ videos, onNavigate }) {
 
     return () => clearInterval(timer);
   }, [job, videoId, loadVideoData]);
+
+  useEffect(() => {
+    if (!videoId) return;
+    let cancelled = false;
+    api
+      .getVideo(videoId)
+      .then((video) => {
+        if (!cancelled) setVideoUrl(String(video.youtube_url ?? ""));
+      })
+      .catch(() => {
+        // ignore 404 when no video metadata is loaded
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [videoId]);
 
   async function retranscribeVideo() {
     if (!videoId) return;
@@ -627,18 +648,12 @@ export default function EditorView({ videos, onNavigate }) {
               <Film size={15} />
               <h3 className="text-[12px] font-semibold text-[#e4e4e7]">Pilih video</h3>
             </div>
-            <select
-              className={INPUT}
-              value={videoId ?? ""}
-              onChange={(event) => setVideoId(Number(event.target.value))}
-            >
-              {videos.map((video) => (
-                <option key={video.id} value={video.id}>
-                  {video.original_filename}
-                </option>
-              ))}
-            </select>
-
+            <VideoPicker
+              videos={videos}
+              activeVideoId={videoId}
+              onSelect={setVideoId}
+              searchPlaceholder="Cari video..."
+            />
             <div className="mt-2 space-y-1 text-[10px] text-[#8b8b95]">
               <p>
                 Durasi: <span className="text-[#e4e4e7]">{formatTime(activeVideo?.duration_sec)}</span>
@@ -654,6 +669,27 @@ export default function EditorView({ videos, onNavigate }) {
                 <span className="text-[#e4e4e7]">{approvedCount}</span>
               </p>
             </div>
+
+            <label className="block mt-3">
+              <span className="mb-1 block text-[9px] uppercase tracking-wide text-[#71717a]">
+                Tautan YouTube
+              </span>
+              <input
+                type="text"
+                placeholder="https://youtube.com/watch?v=xxx"
+                value={videoUrl}
+                onChange={(event) => setVideoUrl(event.target.value)}
+                onBlur={() => {
+                  const value = videoUrl.trim();
+                  if (!value) return;
+                  api
+                    .updateVideo(videoId, { youtube_url: value })
+                    .then(() => setNotice("Tautan YouTube disimpan."))
+                    .catch((err) => setError(err.message));
+                }}
+                className={INPUT}
+              />
+            </label>
 
             <button
               type="button"

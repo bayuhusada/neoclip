@@ -35,6 +35,8 @@ class Video(TimestampMixin, Base):
 
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="uploaded")
     error: Mapped[str | None] = mapped_column(Text())
+    # Optional YouTube link: used only to borrow caption text during transcription.
+    youtube_url: Mapped[str | None] = mapped_column(String(500))
 
     project: Mapped["Project"] = relationship(back_populates="videos")
     transcripts: Mapped[list["Transcript"]] = relationship(

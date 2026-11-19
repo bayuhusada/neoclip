@@ -54,6 +54,7 @@ def build_analysis_payload(transcript_text: str, duration_sec: float) -> dict[st
         ],
         "temperature": 0.3,
         "max_tokens": MAX_OUTPUT_TOKENS,
+        "stream": False,  # prevent SSE/chunked response from 9Router/Gemini
         "response_format": {"type": "json_object"},  # some providers ignore this
     }
 
@@ -166,6 +167,80 @@ def parse_ai_response(raw: str) -> list[dict[str, Any]]:
     return clips[:8]  # hard cap; more than this is noise for a single video
 
 
+def _parse_sse_body(raw: str) -> dict[str, Any] | None:
+    """Rebuild a normal completion body from an SSE stream.
+
+    Some OpenAI-compatible routers (9Router + Gemini) stream chunks even when
+    the request asks for `stream: false`. The chunks carry `delta.content`;
+    concatenating them gives the same text a non-streaming reply would have.
+    """
+    if "data:" not in raw:
+        return None
+
+    parts: list[str] = []
+    model: str | None = None
+    finish_reason: str | None = None
+
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        payload = line[len("data:"):].strip()
+        if not payload or payload == "[DONE]":
+            continue
+        try:
+            chunk = json.loads(payload)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(chunk, dict):
+            continue
+
+        model = model or chunk.get("model")
+        for choice in chunk.get("choices") or []:
+            if not isinstance(choice, dict):
+                continue
+            delta = choice.get("delta") or {}
+            if isinstance(delta.get("content"), str):
+                parts.append(delta["content"])
+            reasoning = delta.get("reasoning_content") or delta.get("reasoning")
+            if isinstance(reasoning, str):
+                parts.append(reasoning)
+            if choice.get("finish_reason"):
+                finish_reason = choice["finish_reason"]
+
+    if not parts:
+        return None
+
+    return {
+        "model": model,
+        "choices": [
+            {
+                "message": {"role": "assistant", "content": "".join(parts)},
+                "finish_reason": finish_reason,
+            }
+        ],
+    }
+
+
+def _load_body(response: Any) -> dict[str, Any]:
+    """Return the completion body, tolerating an accidental SSE stream."""
+    try:
+        body = response.json()
+    except ValueError:
+        body = _parse_sse_body(getattr(response, "text", ""))
+        if body is None:
+            raw = getattr(response, "text", "")[:500]
+            raise RuntimeError(
+                f"AI endpoint returned non-JSON body ({response.status_code}): {raw!r}"
+            )
+    if not isinstance(body, dict):
+        raw = getattr(response, "text", "")[:500]
+        raise RuntimeError(
+            f"AI endpoint returned unexpected JSON ({response.status_code}): {raw!r}"
+        )
+    return body
+
+
 async def analyze_transcript(transcript_text: str, duration_sec: float) -> list[dict[str, Any]]:
     """Call 9Router with the transcript and return parsed clip candidates."""
     cfg = get_effective_config()
@@ -212,14 +287,8 @@ async def analyze_transcript(transcript_text: str, duration_sec: float) -> list[
             detail = response.text[:300]
         raise RuntimeError(f"AI API error {response.status_code}: {detail}")
 
-    # Parse response body (may contain non-JSON)
-    try:
-        body = response.json()
-    except ValueError as exc:
-        raw = response.text[:500]
-        raise RuntimeError(
-            f"AI endpoint returned non-JSON body ({response.status_code}): {raw!r}"
-        ) from exc
+    # Parse response body (tolerates accidental SSE stream)
+    body = _load_body(response)
 
     # Extract finish_reason for retry decisions
     choice = body.get("choices", [{}])[0]
@@ -244,8 +313,8 @@ async def analyze_transcript(transcript_text: str, duration_sec: float) -> list[
         }
         async with httpx.AsyncClient(timeout=build_timeout()) as client:
             response = await client.post(url, headers=headers, json=retry_payload)
-            # Re-parse response
-            body = response.json()
+            # Re-parse response (tolerates accidental SSE stream)
+            body = _load_body(response)
             choice = body.get("choices", [{}])[0]
             finish_reason = choice.get("finish_reason")
             message = choice.get("message")

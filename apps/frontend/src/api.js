@@ -113,11 +113,12 @@ export const api = {
   },
 
   /** XHR is used instead of fetch because only XHR reports upload progress. */
-  uploadVideo: ({ projectId, file, onProgress }) =>
+  uploadVideo: ({ projectId, file, youtubeUrl, onProgress }) =>
     new Promise((resolve, reject) => {
       const form = new FormData();
       form.append("project_id", String(projectId));
       form.append("file", file);
+      if (youtubeUrl) form.append("youtube_url", youtubeUrl);
 
       const xhr = new XMLHttpRequest();
       xhr.open("POST", "/api/videos");
@@ -146,5 +147,11 @@ export const api = {
       xhr.onerror = () => reject(new Error("Network error while uploading"));
       xhr.ontimeout = () => reject(new Error("Upload timed out"));
       xhr.send(form);
+    }),
+  updateVideo: (videoId, payload) =>
+    request(`/api/videos/${videoId}`, {
+      method: "PATCH",
+      headers: JSON_HEADERS,
+      body: JSON.stringify(payload),
     }),
 };

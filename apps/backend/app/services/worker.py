@@ -13,6 +13,7 @@ from app.db import SessionLocal
 from app.models import Clip, Job, Transcript, Video
 from app.services.analyzer import analyze_transcript
 from app.services.audio import extract_audio_wav
+from app.services.captions import is_caption_disabled
 from app.services.face_tracking import cluster_tracks, detect_faces_video, load_face_cache, save_face_cache
 from app.services.framing import generate_framing_keyframes, save_framing_cache
 from app.services.render import normalize_template, render_clip
@@ -90,6 +91,31 @@ def _process_transcribe_job(db, job: Job) -> bool:
 
         text, language, segments = transcribe_audio_file(wav_path)
 
+        # Optional assist: borrow YouTube caption text (never the video) and keep
+        # Whisper timings. Fail-soft: any error keeps the Whisper transcript.
+        model_name = settings.whisper_model
+        youtube_url = getattr(video, "youtube_url", None)
+        if youtube_url:
+            try:
+                from app.services.youtube_transcript import (
+                    extract_video_id,
+                    fetch_segments,
+                    merge_youtube_with_whisper,
+                )
+
+                yt_id = extract_video_id(youtube_url)
+                yt_segments = fetch_segments(yt_id, ["id", "en"]) if yt_id else []
+                if yt_segments:
+                    merged = merge_youtube_with_whisper(segments, yt_segments)
+                    if merged:
+                        segments = merged
+                        text = " ".join(
+                            str(s.get("text", "")).strip() for s in merged
+                        ).strip()
+                        model_name = f"{settings.whisper_model}+youtube"
+            except Exception:  # noqa: BLE001 - optional assist must never fail the job
+                pass
+
         job.progress = PROGRESS_SAVE
         db.commit()
 
@@ -97,7 +123,7 @@ def _process_transcribe_job(db, job: Job) -> bool:
         if transcript is None:
             transcript = Transcript(
                 video_id=video_id,
-                model_name=settings.whisper_model,
+                model_name=model_name,
                 language=language,
                 duration_sec=video.duration_sec,
                 text=text,
@@ -108,7 +134,7 @@ def _process_transcribe_job(db, job: Job) -> bool:
             transcript.text = text
             transcript.language = language
             transcript.segments = segments
-            transcript.model_name = settings.whisper_model
+            transcript.model_name = model_name
             transcript.duration_sec = video.duration_sec
 
         # The WAV is regenerable; keep only the DB row to save disk.
@@ -215,15 +241,17 @@ def _process_render_job(db, job: Job) -> bool:
 
         template = normalize_template(clip.template)
 
-        # Subtitles are derived data: rebuild every render so manual start/end
-        # edits are always reflected in the burned-in text.
-        # Prefer ASS (animated word-level captions) when segments have `words`,
-        # fall back to SRT otherwise.
+        # ── Subtitle handling ──────────────────────────────────────────────
         subtitle_rel = None
         ass_rel = None
-        caption_source = "estimated"
+        caption_source = "none" if is_caption_disabled(getattr(clip, "caption_preset", None)) else "estimated"
         transcript = db.scalar(select(Transcript).where(Transcript.video_id == video.id))
-        if transcript is not None:
+
+        # Clean up any stale subtitle files from a previous run.
+        for old in (settings.subtitles_dir / f"{clip.id}.ass", settings.subtitles_dir / f"{clip.id}.srt"):
+            if old.exists():
+                old.unlink()
+        if transcript is not None and not is_caption_disabled(getattr(clip, "caption_preset", None)):
             from app.services.captions import build_ass
 
             caption_preset = getattr(clip, "caption_preset", "modern_bold") or "modern_bold"
